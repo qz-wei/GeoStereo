@@ -1,11 +1,245 @@
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>我的个人网站</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GeoStereo Project Page</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #d9dddf;
+      --text: #0f172a;
+      --muted: #4b5563;
+      --blue: #2f6fed;
+      --purple: #6d5ce7;
+      --teal: #47c9c1;
+      --button: #061120;
+      --button-hover: #0c1f36;
+      --white: #ffffff;
+      --line: rgba(15, 23, 42, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .container {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 56px 28px 72px;
+    }
+
+    .hero {
+      text-align: center;
+    }
+
+    .title {
+      margin: 0 auto;
+      max-width: 1500px;
+      font-size: clamp(40px, 5.6vw, 84px);
+      line-height: 1.02;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+    }
+
+    .gradient {
+      background: linear-gradient(90deg, var(--teal) 0%, var(--blue) 50%, var(--purple) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .divider {
+      margin: 28px auto 26px;
+      width: min(100%, 1500px);
+      border: none;
+      border-top: 1px solid var(--line);
+    }
+
+    .authors {
+      margin-top: 12px;
+      color: var(--blue);
+      font-weight: 500;
+      font-size: clamp(22px, 2vw, 32px);
+      line-height: 1.6;
+    }
+
+    .authors a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .authors a:hover {
+      text-decoration: underline;
+    }
+
+    .equal-note {
+      margin-top: 8px;
+      font-size: 18px;
+      color: var(--muted);
+    }
+
+    .buttons {
+      margin-top: 34px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 16px 18px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 180px;
+      padding: 14px 22px;
+      border-radius: 14px;
+      background: var(--button);
+      color: var(--white);
+      text-decoration: none;
+      font-weight: 800;
+      font-size: 18px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+      transition: transform 0.18s ease, background 0.18s ease;
+    }
+
+    .btn:hover {
+      background: var(--button-hover);
+      transform: translateY(-1px);
+    }
+
+    .content {
+      max-width: 1100px;
+      margin: 72px auto 0;
+    }
+
+    .section {
+      margin-top: 56px;
+    }
+
+    .section h2 {
+      margin: 0 0 18px;
+      font-size: 34px;
+      line-height: 1.15;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.52);
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      border-radius: 24px;
+      padding: 28px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+    }
+
+    .abstract {
+      font-size: 18px;
+      line-height: 1.85;
+      color: #1f2937;
+      text-align: justify;
+    }
+
+    .citation {
+      background: #eef2f7;
+      border-radius: 16px;
+      padding: 20px;
+      overflow-x: auto;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    @media (max-width: 900px) {
+      .container {
+        padding: 36px 18px 56px;
+      }
+
+      .authors {
+        font-size: 20px;
+      }
+
+      .btn {
+        min-width: 150px;
+        font-size: 17px;
+        padding: 13px 18px;
+      }
+
+      .card {
+        padding: 22px;
+      }
+    }
+  </style>
 </head>
 <body>
-    <h1>你好，世界！</h1>
-    <p>欢迎来到我的第一个个人网站。这里是使用 GitHub Pages 搭建的。</p>
+  <main class="container">
+    <section class="hero">
+      <h1 class="title">
+        <span class="gradient">GeoStereo</span>: A Unified Stereo Geometry Estimation Framework for
+        <span class="gradient">Disparity</span> and <span class="gradient">Surface Normal</span>
+      </h1>
+
+      <hr class="divider" />
+
+      <div class="authors">
+        <a href="#">Qizhe Wei</a>,
+        <a href="#">Xianda Guo</a>,
+        <a href="#">Shaocong Xu</a>,
+        <a href="#">Hong Li</a>,
+        <a href="#">Runyi Yang</a><sup>1</sup>,
+        <a href="#">Hao Zhao</a>
+      </div>
+
+      <div class="equal-note">~ Runyi_Yang<sup>1</sup></div>
+
+      <div class="buttons">
+        <a class="btn" href="#">Download PDF</a>
+        <a class="btn" href="#">Code</a>
+        <a class="btn" href="#">arXiv</a>
+        <a class="btn" href="#">BibTeX</a>
+      </div>
+    </section>
+
+    <section class="content">
+      <div class="section">
+        <h2>Overview</h2>
+        <div class="card">
+          <p class="abstract">
+            GeoStereo is a unified stereo geometry estimation framework that leverages powerful diffusion priors to jointly predict disparity and surface normals. It couples a feed-forward stereo matching pipeline with a diffusion-based normal estimation branch, enabling strong geometric interaction between the two tasks for more robust 3D understanding in challenging scenarios.
+          </p>
+        </div>
+      </div>
+
+      <div class="section" id="abstract">
+        <h2>Abstract</h2>
+        <div class="card">
+          <p class="abstract">
+            Stereo matching and surface normal estimation are fundamental tasks in 3D vision. However, existing feed-forward stereo methods still struggle to produce reliable predictions in challenging regions, mainly due to the lack of strong geometric priors. In this paper, we propose GeoStereo, a unified stereo geometry estimation framework that leverages powerful diffusion priors to jointly predict disparity and surface normals. Specifically, GeoStereo couples a feed-forward stereo matching pipeline with a diffusion-based normal estimation branch. To enable effective interaction between the two tasks, we introduce a disparity to normal initialization strategy and construct a warp to left-view condition for the diffusion process. Under a shared feature extractor, this coupled design allows the diffusion branch to provide strong structural priors that enhance disparity estimation in ill-posed regions, while the feed-forward branch offers reliable geometric guidance for accurate normal prediction. Extensive experiments show that GeoStereo performs reliably in challenging scenarios, including low-light environments, highly reflective surfaces, and transparent objects. Under zero-shot settings, it achieves Rank-1 disparity estimation on multiple stereo benchmarks, including KITTI and NYUv2, and delivers the best normal estimation accuracy on several real indoor benchmarks, such as iBims-1 and ScanNet, providing an effective solution for robust 3D geometry understanding.
+          </p>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>BibTeX</h2>
+        <div class="citation">
+<pre>@article{geostereo2025,
+  title   = {GeoStereo: A Unified Stereo Geometry Estimation Framework for Disparity and Surface Normal},
+  author  = {Qizhe Wei and Xianda Guo and Shaocong Xu and Hong Li and Runyi Yang and Hao Zhao},
+  journal = {arXiv preprint arXiv:XXXX.XXXXX},
+  year    = {2026}
+}</pre>
+        </div>
+      </div>
+    </section>
+  </main>
 </body>
 </html>
