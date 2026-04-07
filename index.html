@@ -44,11 +44,47 @@
 
     .title {
       margin: 0 auto;
-      max-width: 1500px;
-      font-size: clamp(40px, 5.6vw, 84px);
-      line-height: 1.02;
+      max-width: 1540px;
+      font-size: clamp(42px, 5.8vw, 86px);
+      line-height: 1.04;
       font-weight: 900;
-      letter-spacing: -0.04em;
+      letter-spacing: -0.045em;
+    }
+
+    .title .plain {
+      background: linear-gradient(90deg, #5a89f5 0%, #6a74ef 55%, #7b63e6 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .title .g1 {
+      background: linear-gradient(90deg, #49d0c7 0%, #5d95ff 48%, #7f67ef 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      text-shadow: 0 0 1px rgba(255,255,255,0.18);
+    }
+
+    .title .g2 {
+      background: linear-gradient(90deg, #5d85ff 0%, #4f77f0 45%, #6d73ec 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .title .g3 {
+      background: linear-gradient(90deg, #43d1c5 0%, #59c7d2 40%, #76b2ef 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .title .g4 {
+      background: linear-gradient(90deg, #7a62d9 0%, #4e7be7 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
     }
 
     .gradient {
@@ -184,22 +220,31 @@
   <main class="container">
     <section class="hero">
       <h1 class="title">
-        <span class="gradient">GeoStereo</span>: A Unified Stereo Geometry Estimation Framework for
-        <span class="gradient">Disparity</span> and <span class="gradient">Surface Normal</span>
+        <span class="g1">GeoStereo</span><span class="plain">: A Unified Stereo Geometry Estimation</span><br />
+        <span class="plain">Framework for</span> <span class="g2">Disparity</span> <span class="plain">and</span> <span class="g3">Surface Normal</span>
       </h1>
 
       <hr class="divider" />
 
       <div class="authors">
-        <a href="#">Qizhe Wei</a>,
-        <a href="#">Xianda Guo</a>,
-        <a href="#">Shaocong Xu</a>,
-        <a href="#">Hong Li</a>,
-        <a href="#">Runyi Yang</a>,
-        <a href="#">Hao Zhao</a><sup>*</sup>
+        <a href="#">Qizhe Wei</a><sup>1</sup>,
+        <a href="#">Xianda Guo</a><sup>2</sup>,
+        <a href="#">Shaocong Xu</a><sup>1</sup>,
+        <a href="#">Hong Li</a><sup>4</sup>,
+        <a href="#">Runyi Yang</a><sup>5</sup>,
+        <a href="#">Hao Zhao</a><sup>3,*</sup>
       </div>
 
-      <div class="equal-note">* Corresponding author</div>
+      <div class="equal-note">
+        <sup>1</sup> BAAI &nbsp;&nbsp;
+        <sup>2</sup> Wuhan University &nbsp;&nbsp;
+        <sup>3</sup> THU
+        <sup>4</sup> BUAA &nbsp;&nbsp;
+        <sup>5</sup> INSAIT &nbsp;&nbsp;
+        
+        <br />
+        * Corresponding author
+      </div>
 
       <div class="buttons">
         <a class="btn" href="#">Download PDF</a>
