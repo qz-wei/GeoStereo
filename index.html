@@ -44,50 +44,43 @@
 
     .title {
       margin: 0 auto;
-      max-width: 1540px;
-      font-size: clamp(42px, 5.8vw, 86px);
-      line-height: 1.04;
+      max-width: 1620px;
+      font-size: clamp(44px, 6.1vw, 92px);
+      line-height: 1.02;
       font-weight: 900;
-      letter-spacing: -0.045em;
+      letter-spacing: -0.05em;
     }
 
-    .title .plain {
-      background: linear-gradient(90deg, #5a89f5 0%, #6a74ef 55%, #7b63e6 100%);
+    .title .for-word {
+      background: linear-gradient(90deg, #1f2937 0%, #111827 100%);
       -webkit-background-clip: text;
       background-clip: text;
       color: transparent;
     }
 
-    .title .g1 {
-      background: linear-gradient(90deg, #49d0c7 0%, #5d95ff 48%, #7f67ef 100%);
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-      text-shadow: 0 0 1px rgba(255,255,255,0.18);
-    }
-
-    .title .g2 {
-      background: linear-gradient(90deg, #5d85ff 0%, #4f77f0 45%, #6d73ec 100%);
+    .title .other {
+      background: linear-gradient(90deg, #4ccec5 0%, #4f86f4 55%, #6f63e8 100%);
       -webkit-background-clip: text;
       background-clip: text;
       color: transparent;
     }
 
-    .title .g3 {
-      background: linear-gradient(90deg, #43d1c5 0%, #59c7d2 40%, #76b2ef 100%);
+    .title .geostereo {
+      background: linear-gradient(90deg, #48d2c6 0%, #5aa0ff 50%, #7a68ef 100%);
       -webkit-background-clip: text;
       background-clip: text;
       color: transparent;
     }
 
-    .title .g4 {
-      background: linear-gradient(90deg, #7a62d9 0%, #4e7be7 100%);
+    .title .task {
+      background: linear-gradient(90deg, #5f7ff7 0%, #4f79ef 50%, #5f7ff7 100%);
       -webkit-background-clip: text;
       background-clip: text;
       color: transparent;
     }
 
     .gradient {
+
       background: linear-gradient(90deg, var(--teal) 0%, var(--blue) 50%, var(--purple) 100%);
       -webkit-background-clip: text;
       background-clip: text;
@@ -219,7 +212,7 @@
 <body>
   <main class="container">
     <section class="hero">
-          <h1 class="title">
+      <h1 class="title">
         <span class="geostereo">GeoStereo</span><span class="other">: A Unified Stereo Geometry Estimation</span>
         <span class="other">Framework</span> <span class="for-word">for</span> <span class="task">Disparity</span> <span class="other">and</span> <span class="task">Surface Normal</span>
       </h1>
