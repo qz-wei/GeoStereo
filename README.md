@@ -1,8 +1,7 @@
 <div align="center">
 
-<h1>GeoStereo</h1>
+<h1>GeoStereo: A Unified Stereo Geometry Estimation Framework for Disparity and Surface Normal</h1>
 
-<h3>A Unified Stereo Geometry Estimation Framework for Disparity and Surface Normal</h3>
 
 <p>
   Qizhe Wei, Xianda Guo, Shaocong Xu, Hong Li, Runyi Yang, Hao Zhao
