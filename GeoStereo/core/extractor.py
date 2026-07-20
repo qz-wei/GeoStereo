@@ -323,7 +323,7 @@ class Feature(nn.Module):
         x_in_ = F.interpolate(x, size=(H_resize, W_resize), mode='bicubic', align_corners=False)
         self.dino = self.dino.eval()
         with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=False):
+            with torch.amp.autocast("cuda",enabled=False):
                 output = self.dino(x_in_, return_tokens=True, return_depth=True)
         vit_feat = output['out']
         left_tokens = output["tokens"][:B_view] 

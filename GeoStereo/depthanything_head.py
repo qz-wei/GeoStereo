@@ -22,13 +22,15 @@ class DepthAnythingFeature(nn.Module):
     def __init__(
         self,
         encoder='vitl',
-        tokens_out_dim: int | None = None, 
+        # 如果你要“无痛替换” StableNormal 里原 dinov2_vitl14 的输入通道，建议用 vitl；
+        # 如果你用 vits/vitb，最好把 tokens 投影到 1024 再喂给你们现有的 dino_controlnet_cond_embedding。
+        tokens_out_dim: int | None = None,   # e.g. 1024 for StableNormal
         do_imagenet_norm: bool = True,
-        resize_to: int | None = None,       
+        resize_to: int | None = None,       # StableNormal 场景可设 672；你的 Feature 里已 resize，可设 None
         antialias: bool = True,
     ):
         super().__init__()
-        from depth_anything.dpt import DepthAnything  
+        from depth_anything.dpt import DepthAnything  # 你原来就是这个 import
 
         self.encoder = encoder
         self.do_imagenet_norm = do_imagenet_norm
@@ -38,7 +40,7 @@ class DepthAnythingFeature(nn.Module):
         depth_anything = DepthAnything(self.model_configs_dinov2[encoder])
         self.depth_anything = depth_anything
 
-
+        # NOTE: 你写的是 V2 的 idx；只要你用的 backbone 是 DINOv2 这套，索引是对的
         self.intermediate_layer_idx = {
             'vits': [2, 5, 8, 11],
             'vitb': [2, 5, 8, 11],
@@ -46,7 +48,7 @@ class DepthAnythingFeature(nn.Module):
             'vitg': [9, 19, 29, 39],
         }
 
-
+        # optional: 把 tokens 投影到固定通道（比如 1024）
         embed_dim = self.model_configs[encoder]['embed_dim']
         self.tokens_proj = None
         if tokens_out_dim is not None and tokens_out_dim != embed_dim:
@@ -62,11 +64,15 @@ class DepthAnythingFeature(nn.Module):
     @torch.no_grad()
     def forward(
         self,
-        x: torch.Tensor,                    
-        return_depth: bool = True,        
-        return_tokens: bool = True,        
+        x: torch.Tensor,                    # [B,3,H,W]
+        return_depth: bool = True,          # 是否返回 out/path/disp 这些（你另一个网络要用）
+        return_tokens: bool = True,         # 是否返回 tokens（StableNormal 要用）
     ):
-
+        """
+        返回 dict，至少包含:
+          - 'tokens': [B,C,Hp,Wp]  (如果 return_tokens=True)
+          - 以及你原先的 out/path_*/features/disp (如果 return_depth=True)
+        """
         B, C, H, W = x.shape
         
 
@@ -74,8 +80,11 @@ class DepthAnythingFeature(nn.Module):
         if isinstance(patch_size, (tuple, list)):
             patch_size = patch_size[0]
         if H % patch_size != 0 or W % patch_size != 0:
+            # 只提醒：最好保证输入能整除 patch_size
+            # 你的 Feature 网络里已经做了 divider=lcm(14,16)，所以一般不会触发
             pass
 
+        # 取中间层 tokens（给 depth_head，也能用来 reshape 成 tokens map）
         feats = self.depth_anything.pretrained.get_intermediate_layers(
             x,
             self.intermediate_layer_idx[self.encoder],
@@ -84,14 +93,17 @@ class DepthAnythingFeature(nn.Module):
 
         out_dict = {}
 
+        # ---- tokens: [B, embed_dim, H/patch, W/patch] ----
         if return_tokens:
             last = feats[-1]
+            # 兼容两种输出：(patch_tokens, cls_token) 或 直接 patch_tokens
             if isinstance(last, (tuple, list)) and len(last) >= 1:
                 patch_tokens = last[0]  # [B, N, C]
             else:
                 patch_tokens = last
 
             if patch_tokens.dim() == 3:
+                # reshape N -> (Hp,Wp)
                 Hp, Wp = x.shape[-2] // patch_size, x.shape[-1] // patch_size
                 tokens = patch_tokens.reshape(B, Hp, Wp, patch_tokens.shape[-1]).permute(0, 3, 1, 2).contiguous()
             elif patch_tokens.dim() == 4:
@@ -102,9 +114,9 @@ class DepthAnythingFeature(nn.Module):
             if self.tokens_proj is not None:
                 tokens = self.tokens_proj(tokens)
 
-            out_dict["tokens"] = tokens 
+            out_dict["tokens"] = tokens  # 给 StableNormal 用
 
-
+        # ---- depth head intermediates (保持你原逻辑/接口) ----
         if return_depth:
             patch_h = x.shape[-2] // patch_size
             patch_w = x.shape[-1] // patch_size

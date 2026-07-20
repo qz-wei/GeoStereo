@@ -1,25 +1,13 @@
-# Copyright 2024 Marigold authors, PRS ETH Zurich. All rights reserved.
-# Copyright 2024 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# --------------------------------------------------------------------------
-# More information and citation instructions are available on the
-# --------------------------------------------------------------------------
 from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple, Union
-import inspect 
+import inspect
+import json
+import os,sys
 import numpy as np
 import torch
+from safetensors.torch import load_file
 from PIL import Image
 from tqdm.auto import tqdm
 from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
@@ -31,9 +19,7 @@ from diffusers.models import (
     UNet2DConditionModel,
     ControlNetModel,
 )
-from diffusers.schedulers import (
-    DDIMScheduler
-)
+from diffusers.schedulers import DDPMScheduler
 
 from diffusers.utils import (
     BaseOutput,
@@ -54,16 +40,19 @@ import torch.nn.functional as F
 from omegaconf import OmegaConf
 import cv2
 import contextlib
-from GeoStereo.core.foundation_stereo import FoundationStereo
+from .core.foundation_stereo import FoundationStereo
+from .warp_controlnetvae import Warp_ControlNetVAEModel
+from .normal_controlnetvae import Normal_ControlNetVAEModel
+from huggingface_hub import snapshot_download
 from einops import rearrange  
 import torchvision
 import time
 
-logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+logger = logging.get_logger(__name__)  
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD  = (0.229, 0.224, 0.225)
-DINO_PATCH = 14  # dinov2 patch size (assert H,W multiple of 14)
+DINO_PATCH = 14  
 
 def normalize_normals(n: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     return n / (torch.norm(n, dim=1, keepdim=True) + eps)
@@ -71,7 +60,7 @@ def normalize_normals(n: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 def warp_right_to_left(
     right_bchw: torch.Tensor,
     disp_b1hw: torch.Tensor,
-    sign: str = "minus",   # "minus": x_r = x_l - d  (common). "plus": x_r = x_l + d
+    sign: str = "minus",  
     align_corners: bool = True,
 ) -> torch.Tensor:
     B, C, H, W = right_bchw.shape
@@ -237,37 +226,27 @@ def img_to_m11(img: torch.Tensor) -> torch.Tensor:
         return (img / 127.5 - 1.0).clamp(-1, 1)
     return (img * 2.0 - 1.0).clamp(-1, 1)
 
-
-def m11_to_01(x: torch.Tensor) -> torch.Tensor:
-    return ((x + 1.0) * 0.5).clamp(0.0, 1.0)
-
-
 def normalize_image_imagenet(img: torch.Tensor) -> torch.Tensor:
     img01 = img_to_01(img)
     tf = torchvision.transforms.Normalize(mean=list(IMAGENET_MEAN), std=list(IMAGENET_STD), inplace=False)
     return tf(img01).contiguous()
 
-def _cuda_time():
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    return time.perf_counter()
 
-def _log_dt(name, t_start, prefix="[TIME]"):
-    t_end = _cuda_time()
-    dt = t_end - t_start
-    print(f"{prefix} {name:<32s}: {dt*1000:.2f} ms")
-    return t_end
 
 
 @dataclass
-class StableNormalOutput(BaseOutput):
-    prediction: Union[np.ndarray, torch.Tensor]
-    latent: Optional[torch.Tensor] = None
-    gaus_noise: Optional[torch.Tensor] = None
-    disp_pred: Optional[torch.Tensor] = None
-    normal_init: Optional[torch.Tensor] = None
+class GeoStereoOutput(BaseOutput):
+    """GeoStereo inference result.
 
-class StableNormalPipeline(StableDiffusionControlNetPipeline):
+    Attributes:
+        normal: Predicted surface normal map.
+        disparity: Predicted disparity map.
+    """
+
+    normal: Union[np.ndarray, torch.Tensor]
+    disparity: torch.Tensor
+
+class GeoStereoPipeline(StableDiffusionControlNetPipeline):
     model_cpu_offload_seq = "text_encoder->image_encoder->unet->vae"
     _optional_components = ["safety_checker", "feature_extractor", "image_encoder"]
     _exclude_from_cpu_offload = ["safety_checker"]
@@ -280,7 +259,7 @@ class StableNormalPipeline(StableDiffusionControlNetPipeline):
         tokenizer: CLIPTokenizer,
         unet: UNet2DConditionModel,
         controlnet,
-        dino_controlnet,
+        normal_controlnet,
         scheduler,
         safety_checker,
         feature_extractor,
@@ -288,7 +267,7 @@ class StableNormalPipeline(StableDiffusionControlNetPipeline):
         requires_safety_checker=True,
         default_denoising_steps=1,
         default_processing_resolution=768,
-        prompt="a normal map",
+        prompt="",
         empty_text_embedding=None,
         args=None,
     ):
@@ -306,23 +285,29 @@ class StableNormalPipeline(StableDiffusionControlNetPipeline):
         )
 
         self.register_modules(
-            dino_controlnet=dino_controlnet,
+            normal_controlnet=normal_controlnet,
         )
         self.args = args
-        self.image_processor = MarigoldImageProcessor(vae_scale_factor=self.vae_scale_factor)
-        self.dino_image_processor = lambda x: x / 127.5 -1.
-        cfg = OmegaConf.load(args.cfg_yaml)
-        for k, v in vars(args).items():
-            cfg[k] = v
-        margs = OmegaConf.create(cfg)
-        self.margs = margs
+        self.image_processor = MarigoldImageProcessor(
+            vae_scale_factor=self.vae_scale_factor
+        )
+
+        foundation_config = dict(args.foundation_config)
+        foundation_config.update(
+            {
+                key: value
+                for key, value in vars(args).items()
+                if key != "foundation_config"
+            }
+        )
+        self.margs = OmegaConf.create(foundation_config)
         self.default_denoising_steps = default_denoising_steps
         self.default_processing_resolution = default_processing_resolution
         self.prompt = prompt
         self.prompt_embeds = None
         self.empty_text_embedding = empty_text_embedding
         depth_any = DepthAnythingFeature(
-            encoder="vitl",
+            encoder=str(getattr(self.margs, "vit_size", "vitl")),
             tokens_out_dim=None,
             resize_to=None,
         )
@@ -331,29 +316,265 @@ class StableNormalPipeline(StableDiffusionControlNetPipeline):
         self.train_iters = int(getattr(args, "train_iters", 10))
         #self.register_modules(args=args)
 
-    def force_fp32(self, device=None):
-        """Force every inference module used by this pipeline to float32.
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_path: Union[str, os.PathLike],
+        *,
+        device: Optional[Union[str, torch.device]] = None,
+        torch_dtype: torch.dtype = torch.float32,
+        enable_xformers: bool = False,
+        **overrides,
+    ) -> "GeoStereoPipeline":
+        """Load GeoStereo from a fixed local or Hugging Face model layout."""
+        candidate = Path(
+            os.path.expandvars(
+                os.path.expanduser(str(model_path))
+            )
+        )
 
-        This is useful when eval.py or Diffusers has previously converted modules to fp16/bf16.
-        The current training script was run with mixed_precision='no', so this keeps inference
-        numerically aligned with training.
-        """
+        root = (
+            candidate.resolve()
+            if candidate.is_dir()
+            else Path(
+                snapshot_download(repo_id=str(model_path))
+            ).resolve()
+        )
+
+        geostereo_config_path = root / "GeoStereo_config.json"
+        foundation_config_path = (
+            root / "foundation_stereo" / "config.json"
+        )
+        foundation_weights_path = (
+            root
+            / "foundation_stereo"
+            / "model.safetensors"
+        )
+
+        required_paths = (
+            geostereo_config_path,
+            root / "unet",
+            root / "controlnet",
+            root / "normal_controlnet",
+            root / "vae",
+            root / "text_encoder",
+            root / "tokenizer",
+            root / "scheduler",
+            foundation_config_path,
+            foundation_weights_path,
+        )
+        missing_paths = [
+            str(path.relative_to(root))
+            for path in required_paths
+            if not path.exists()
+        ]
+        if missing_paths:
+            raise FileNotFoundError(
+                f"GeoStereo model directory is incomplete: {root}. "
+                f"Missing: {missing_paths}"
+            )
+
+        with geostereo_config_path.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+            release_config: Dict[str, Any] = json.load(file)
+
+        runtime_config: Dict[str, Any] = {
+            "mono": False,
+            "train_iters": 15,
+            "max_disp": 416,
+            "timestep": 999,
+            "warp_sign": "minus",
+            "warp_control_scale": 0.2,
+            "normal_control_scale": 0.2,
+            "infer_divider": 32,
+            "infer_max_res": 2240,
+            "vae_latent_sampling": "sample",
+        }
+        runtime_config.update(release_config)
+        runtime_config.update(
+            {
+                key: value
+                for key, value in overrides.items()
+                if value is not None
+            }
+        )
+
+        with foundation_config_path.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+            foundation_config: Dict[str, Any] = json.load(file)
+
+        pipe_args = SimpleNamespace(
+            foundation_config=foundation_config,
+            mono=bool(runtime_config["mono"]),
+            train_iters=int(runtime_config["train_iters"]),
+            max_disp=int(runtime_config["max_disp"]),
+            timestep=int(runtime_config["timestep"]),
+            warp_sign=str(runtime_config["warp_sign"]),
+            warp_control_scale=float(
+                runtime_config["warp_control_scale"]
+            ),
+            normal_control_scale=float(
+                runtime_config["normal_control_scale"]
+            ),
+            infer_divider=int(runtime_config["infer_divider"]),
+            infer_max_res=int(runtime_config["infer_max_res"]),
+            vae_latent_sampling=str(
+                runtime_config["vae_latent_sampling"]
+            ),
+        )
+
+        tokenizer = CLIPTokenizer.from_pretrained(
+            str(root),
+            subfolder="tokenizer",
+        )
+        text_encoder = CLIPTextModel.from_pretrained(
+            str(root),
+            subfolder="text_encoder",
+        )
+        vae = AutoencoderKL.from_pretrained(
+            str(root),
+            subfolder="vae",
+        )
+        scheduler = DDPMScheduler.from_pretrained(
+            str(root),
+            subfolder="scheduler",
+        )
+        unet = UNet2DConditionModel.from_pretrained(
+            str(root),
+            subfolder="unet",
+        )
+        warp_controlnet = Warp_ControlNetVAEModel.from_pretrained(
+            str(root),
+            subfolder="controlnet",
+        )
+        normal_controlnet = Normal_ControlNetVAEModel.from_pretrained(
+            str(root),
+            subfolder="normal_controlnet",
+        )
+
+        pipe = cls(
+            args=pipe_args,
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            unet=unet,
+            controlnet=warp_controlnet,
+            normal_controlnet=normal_controlnet,
+            scheduler=scheduler,
+            safety_checker=None,
+            feature_extractor=None,
+            image_encoder=None,
+            requires_safety_checker=False,
+            default_denoising_steps=1,
+            default_processing_resolution=0,
+            prompt="",
+            empty_text_embedding=None,
+        )
+
+        foundation_state_dict = load_file(
+            str(foundation_weights_path),
+            device="cpu",
+        )
+        missing_keys, unexpected_keys = (
+            pipe.FoundationStereo.load_state_dict(
+                foundation_state_dict,
+                strict=False,
+            )
+        )
+
+        if missing_keys:
+            logger.warning(
+                "FoundationStereo missing keys (%d): %s",
+                len(missing_keys),
+                missing_keys,
+            )
+        if unexpected_keys:
+            logger.warning(
+                "FoundationStereo unexpected keys (%d): %s",
+                len(unexpected_keys),
+                unexpected_keys,
+            )
+
+        device = torch.device(
+            device
+            if device is not None
+            else (
+                "cuda"
+                if torch.cuda.is_available()
+                else "cpu"
+            )
+        )
+
+        pipe.set_inference_dtype(
+            device=device,
+            torch_dtype=torch_dtype,
+        )
+
+        if enable_xformers:
+            pipe.unet.enable_xformers_memory_efficient_attention()
+
+        pipe.eval()
+        pipe.model_root = root
+        pipe.release_config = runtime_config
+        return pipe
+
+    def set_inference_dtype(
+        self,
+        device: Optional[Union[str, torch.device]] = None,
+        torch_dtype: torch.dtype = torch.float32,
+    ):
+        """Move diffusion modules to the selected dtype and keep FoundationStereo in fp32."""
         if device is None:
             device = self._execution_device
+        device = torch.device(device)
 
-        for name in ("vae", "text_encoder", "unet", "controlnet", "dino_controlnet"):
+        for name in (
+            "vae",
+            "text_encoder",
+            "unet",
+            "controlnet",
+            "normal_controlnet",
+        ):
             module = getattr(self, name, None)
             if module is not None:
-                module.to(device=device, dtype=torch.float32)
+                module.to(device=device, dtype=torch_dtype)
+                module.eval()
 
-        if hasattr(self, "FoundationStereo") and self.FoundationStereo is not None:
-            self.FoundationStereo = self.FoundationStereo.to(device=device, dtype=torch.float32)
-            try:
-                self.FoundationStereo.feature = self.FoundationStereo.feature.to(device=device, dtype=torch.float32)
-                self.FoundationStereo.feature.dino = self.FoundationStereo.feature.dino.to(device=device, dtype=torch.float32)
-            except Exception:
-                pass
+        self.FoundationStereo = self.FoundationStereo.to(
+            device=device,
+            dtype=torch.float32,
+        )
+        self.FoundationStereo.eval()
+        try:
+            self.FoundationStereo.feature = self.FoundationStereo.feature.to(
+                device=device,
+                dtype=torch.float32,
+            )
+            self.FoundationStereo.feature.dino = self.FoundationStereo.feature.dino.to(
+                device=device,
+                dtype=torch.float32,
+            )
+        except Exception:
+            pass
 
+        return self
+
+    def eval(self):
+        for name in (
+            "vae",
+            "text_encoder",
+            "unet",
+            "controlnet",
+            "normal_controlnet",
+            "FoundationStereo",
+        ):
+            module = getattr(self, name, None)
+            if module is not None and hasattr(module, "eval"):
+                module.eval()
         return self
 
     def progress_bar(self, iterable=None, total=None, desc=None, leave=True):
@@ -379,321 +600,360 @@ class StableNormalPipeline(StableDiffusionControlNetPipeline):
         self,
         image1,
         image2,
-        prompt=None,
+        prompt: Optional[str] = None,
         match_input_resolution: bool = True,
-        resample_method_input: str = "bilinear",
         resample_method_output: str = "bilinear",
-        batch_size: int = 1,
-        ensembling_kwargs=None,
-        latents=None,
-        prompt_embeds=None,
-        negative_prompt_embeds=None,
-        num_images_per_prompt: Optional[int] = 1,
-        generator=None,
-        controlnet_conditioning_scale: Union[float, List[float]] = None,
+        latents: Optional[torch.Tensor] = None,
+        prompt_embeds: Optional[torch.Tensor] = None,
+        generator: Optional[torch.Generator] = None,
+        controlnet_conditioning_scale: Optional[float] = None,
+        warp_controlnet_conditioning_scale: Optional[float] = None,
+        normal_controlnet_conditioning_scale: Optional[float] = None,
         output_type: str = "np",
-        output_uncertainty: bool = False,
-        output_latent: bool = False,
         return_dict: bool = True,
+        **kwargs,
     ):
         """
-        Inference path aligned with the current training script.
+        One-shot inference aligned with the released training objective.
 
-        Training does:
-            unet_input = cat([VAE(left_rgb), VAE(normal_init)], dim=1)
-            timestep = 999
-            rgb_controlnet input = VAE(warp_right_to_left(right_rgb, disp))
-            dino_controlnet input = FoundationStereo left_tokens
-            unet predicts normal latent directly in one forward pass.
+        Training input:
+            UNet input = [VAE(left RGB), noisy target-normal latent]
+            Warp ControlNet input = VAE(warped right RGB), timestep=t
+            Normal ControlNet input = VAE(stereo normal prior), timestep=0
+            UNet target = clean target-normal latent x0
 
-        Therefore this pipeline intentionally does NOT run a DDIM denoising loop.
+        Since the target normal is unknown at inference time, the second UNet
+        input is sampled Gaussian noise at the fixed training timestep.
+
+        Returns only the final surface normal and FoundationStereo disparity.
+        The intermediate stereo-derived normal prior is used internally but is
+        not exposed in the public output.
         """
-        device = self._execution_device
-        self.force_fp32(device)
-        t_all = _cuda_time()
-
-        # From this point on, all model inputs/conditions are kept in fp32.
-        fp32_dtype = torch.float32
-
         if not torch.is_tensor(image1) or not torch.is_tensor(image2):
-            raise ValueError("为了和训练代码对齐，这里建议直接喂 torch Tensor 的 left/right。")
-        t_fixed = int(getattr(self.args, "t_fixed", 999))
+            raise TypeError(
+                "`image1` and `image2` must be torch tensors. "
+                "Use infer.py for loading image paths."
+            )
+
+        device = self._execution_device
+        model_dtype = next(self.unet.parameters()).dtype
+        vae_dtype = next(self.vae.parameters()).dtype
+
+        timestep_value = int(getattr(self.args, "timestep", 999))
         max_disp = float(getattr(self.args, "max_disp", 416))
-        train_iters = int(getattr(self, "train_iters", getattr(self.args, "train_iters", 15)))
-        if controlnet_conditioning_scale is None:
-            controlnet_conditioning_scale = float(getattr(self.args, "control_scale", 0.2))
-        warp_sign = getattr(self.args, "warp_sign", "minus")
+        train_iters = int(getattr(self.args, "train_iters", 15))
+        warp_sign = str(getattr(self.args, "warp_sign", "minus"))
+        vae_sampling = str(
+            getattr(self.args, "vae_latent_sampling", "mode")
+        ).lower()
 
-        # -----------------------------
-        # A) input -> [-1,1], adaptive resize
-        # -----------------------------
-        t0 = _cuda_time()
-        left_m11 = img_to_m11(image1).to(device, non_blocking=True)
-        right_m11 = img_to_m11(image2).to(device, non_blocking=True)
+        legacy_scale = controlnet_conditioning_scale
+        if warp_controlnet_conditioning_scale is None:
+            warp_controlnet_conditioning_scale = (
+                float(legacy_scale)
+                if legacy_scale is not None
+                else float(getattr(self.args, "warp_control_scale", 0.2))
+            )
+        if normal_controlnet_conditioning_scale is None:
+            normal_controlnet_conditioning_scale = (
+                float(legacy_scale)
+                if legacy_scale is not None
+                else float(getattr(self.args, "normal_control_scale", 0.2))
+            )
 
-        B_orig, _, H_orig, W_orig = left_m11.shape
-        original_resolution = (H_orig, W_orig)
+        left_m11 = img_to_m11(image1).to(
+            device=device,
+            dtype=model_dtype,
+            non_blocking=True,
+        )
+        right_m11 = img_to_m11(image2).to(
+            device=device,
+            dtype=model_dtype,
+            non_blocking=True,
+        )
+
+        if left_m11.shape != right_m11.shape:
+            raise ValueError(
+                "Left/right tensors must have the same shape, got "
+                f"{tuple(left_m11.shape)} and {tuple(right_m11.shape)}."
+            )
+
+        _, _, original_h, original_w = left_m11.shape
+        original_resolution = (original_h, original_w)
 
         divider = int(getattr(self.args, "infer_divider", 32))
         max_res = int(getattr(self.args, "infer_max_res", 2240))
-        H_resize, W_resize = get_resize_keep_aspect_ratio(
-            H_orig, W_orig, divider=divider, max_H=max_res, max_W=max_res
+        resize_h, resize_w = get_resize_keep_aspect_ratio(
+            original_h,
+            original_w,
+            divider=divider,
+            max_H=max_res,
+            max_W=max_res,
         )
 
-        if (H_resize, W_resize) != (H_orig, W_orig):
-            left_m11 = F.interpolate(left_m11, size=(H_resize, W_resize), mode="bicubic", align_corners=False)
-            right_m11 = F.interpolate(right_m11, size=(H_resize, W_resize), mode="bicubic", align_corners=False)
+        if (resize_h, resize_w) != original_resolution:
+            left_m11 = F.interpolate(
+                left_m11,
+                size=(resize_h, resize_w),
+                mode="bicubic",
+                align_corners=False,
+            )
+            right_m11 = F.interpolate(
+                right_m11,
+                size=(resize_h, resize_w),
+                mode="bicubic",
+                align_corners=False,
+            )
 
-        B, _, H, W = left_m11.shape
-        _log_dt("input -> m11 & adaptive resize", t0)
+        batch_size = left_m11.shape[0]
+        no_autocast = (
+            torch.autocast("cuda", enabled=False)
+            if device.type == "cuda"
+            else contextlib.nullcontext()
+        )
 
-        # -----------------------------
-        # B) stereo normalization, exactly like training
-        # -----------------------------
-        t1 = _cuda_time()
-        left_01 = m11_to_01(left_m11)
-        right_01 = m11_to_01(right_m11)
-        left_stereo = normalize_image_imagenet(left_01)
-        right_stereo = normalize_image_imagenet(right_01)
-        print(f"Adaptive Resized Shapes: left {left_stereo.shape}, right {right_stereo.shape}")
-        _log_dt("normalize_image_imagenet", t1)
+        left_stereo = normalize_image_imagenet(left_m11).float()
+        right_stereo = normalize_image_imagenet(right_m11).float()
 
-        try:
-            if hasattr(self.FoundationStereo, "args") and hasattr(self.FoundationStereo.args, "mixed_precision"):
-                self.FoundationStereo.args.mixed_precision = False
-        except Exception:
-            pass
-
-        no_autocast = torch.autocast("cuda", enabled=False) if device.type == "cuda" else contextlib.nullcontext()
-
-        # -----------------------------
-        # C) FoundationStereo: use returned left_tokens when available
-        # -----------------------------
-        t2 = _cuda_time()
         with no_autocast:
-            _, disp_preds, left_tokens = self.FoundationStereo(
-                left_stereo.float(),
-                right_stereo.float(),
+            _, disp_predictions, _ = self.FoundationStereo(
+                left_stereo,
+                right_stereo,
                 iters=train_iters,
                 test_mode=False,
             )
-            disp_pred = disp_preds[-1].float()
-            if disp_pred.dim() == 3:
+            disp_pred = disp_predictions[-1].float()
+            if disp_pred.ndim == 3:
                 disp_pred = disp_pred.unsqueeze(1)
-            disp_pred_safe = disp_pred.detach().clamp(min=1e-3, max=max_disp)
-        _log_dt("FoundationStereo forward", t2)
-
-        # -----------------------------
-        # D) disparity -> clean normal_init, exactly matching training signs
-        # -----------------------------
-        t3 = _cuda_time()
-        normal_init = disp_to_normal_points_no_intrinsics(
-            disp_pred_safe.detach(),
-            max_disp=max_disp,
-            use_log=True,
-            smooth_ks=5,
-            focal_scale=1.5,
-            flip_x=False,
-            flip_y=False,
-            flip_z=False,
-        )
-        valid_normal = (disp_pred_safe > 1e-3).float()
-        normal_init = normalize_normals(normal_init) * valid_normal
-        normal_init = normal_init.clamp(-1.0, 1.0)
-        _log_dt("disp_to_normal_points_no_intrinsics", t3)
-
-        # -----------------------------
-        # E) VAE latents: cat([left_rgb_latent, init_normal_latent]) for 8ch UNet
-        # -----------------------------
-        t4 = _cuda_time()
-        vae_dtype = fp32_dtype
-        unet_dtype = fp32_dtype
-        with no_autocast:
-            # Use mode for deterministic inference. If you want stochastic VAE sampling, change mode() to sample().
-            rgb_latent = self.vae.encode(left_m11.to(dtype=vae_dtype)).latent_dist.mode() * self.vae.config.scaling_factor
-            init_latent = self.vae.encode(normal_init.to(dtype=vae_dtype)).latent_dist.mode() * self.vae.config.scaling_factor
-        rgb_latent = rgb_latent.to(device=device, dtype=fp32_dtype)
-        init_latent = init_latent.to(device=device, dtype=fp32_dtype)
-        unet_input = torch.cat([rgb_latent, init_latent], dim=1)
-        _log_dt("vae.encode left/init + cat 8ch", t4)
-
-        if self.unet.config.in_channels != unet_input.shape[1]:
-            raise ValueError(
-                f"UNet expects {self.unet.config.in_channels} input channels, "
-                f"but pipeline built {unet_input.shape[1]}. 请确认加载的是训练后 8-channel UNet checkpoint。"
+            disp_pred_safe = disp_pred.clamp(
+                min=1e-3,
+                max=max_disp,
             )
 
-        # -----------------------------
-        # F) RGB ControlNet input = warped right latent, same as training
-        # -----------------------------
-        t5 = _cuda_time()
-        if self.mono:
-            right_warpm11 = left_m11
-        else:
-            right_warpm11 = warp_right_to_left(
-                right_m11,
+            normal_init = disp_to_normal_points_no_intrinsics(
                 disp_pred_safe.detach(),
+                max_disp=max_disp,
+                use_log=True,
+                smooth_ks=5,
+                focal_scale=1.5,
+                flip_x=False,
+                flip_y=False,
+                flip_z=False,
+            )
+            valid_normal = (disp_pred_safe > 1e-3).float()
+            normal_init = (
+                normalize_normals(normal_init) * valid_normal
+            ).clamp(-1.0, 1.0)
+
+        if bool(getattr(self.args, "mono", False)):
+            right_warp_m11 = left_m11
+        else:
+            right_warp_m11 = warp_right_to_left(
+                right_m11,
+                disp_pred_safe.detach().to(dtype=right_m11.dtype),
                 sign=warp_sign,
                 align_corners=True,
-            ).to(dtype=left_m11.dtype)
-        with no_autocast:
-            warp_to_left_latent = (
-                self.vae.encode(right_warpm11.to(dtype=vae_dtype)).latent_dist.mode()
-                * self.vae.config.scaling_factor
             )
-        warp_to_left_latent = warp_to_left_latent.to(device=device, dtype=fp32_dtype)
-        _log_dt("warp right + vae.encode", t5)
 
-        # -----------------------------
-        # G) prompt embeddings
-        # -----------------------------
-        t6 = _cuda_time()
+        def encode_vae(image: torch.Tensor) -> torch.Tensor:
+            posterior = self.vae.encode(
+                image.to(device=device, dtype=vae_dtype)
+            ).latent_dist
+            if vae_sampling == "sample":
+                try:
+                    latent = posterior.sample(generator=generator)
+                except TypeError:
+                    latent = posterior.sample()
+            elif vae_sampling == "mode":
+                latent = posterior.mode()
+            else:
+                raise ValueError(
+                    "vae_latent_sampling must be 'sample' or 'mode', "
+                    f"got {vae_sampling!r}."
+                )
+            return latent * self.vae.config.scaling_factor
+
+        with no_autocast:
+            rgb_latent = encode_vae(left_m11)
+            init_latent = encode_vae(normal_init)
+            warp_latent = encode_vae(right_warp_m11)
+
+        rgb_latent = rgb_latent.to(device=device, dtype=model_dtype)
+        init_latent = init_latent.to(device=device, dtype=model_dtype)
+        warp_latent = warp_latent.to(device=device, dtype=model_dtype)
+
+        timesteps = torch.full(
+            (batch_size,),
+            timestep_value,
+            device=device,
+            dtype=torch.long,
+        )
+
+        if latents is None:
+            gaussian_noise = randn_tensor(
+                init_latent.shape,
+                generator=generator,
+                device=device,
+                dtype=model_dtype,
+            )
+        else:
+            gaussian_noise = latents.to(device=device, dtype=model_dtype)
+            if gaussian_noise.shape != init_latent.shape:
+                raise ValueError(
+                    "`latents` must match the normal latent shape "
+                    f"{tuple(init_latent.shape)}, got {tuple(gaussian_noise.shape)}."
+                )
+
+        # Match the noise amplitude used by scheduler.add_noise at training.
+        noisy_target_latent = self.scheduler.add_noise(
+            torch.zeros_like(gaussian_noise),
+            gaussian_noise,
+            timesteps,
+        )
+        unet_input = torch.cat(
+            [rgb_latent, noisy_target_latent],
+            dim=1,
+        )
+
+        if int(self.unet.config.in_channels) != 8:
+            raise RuntimeError(
+                "GeoStereo requires the trained 8-channel UNet, but the loaded "
+                f"UNet reports in_channels={self.unet.config.in_channels}."
+            )
+
         if prompt_embeds is None:
             if self.prompt_embeds is None or prompt is not None:
-                prompt_str = prompt if prompt is not None else getattr(self, "prompt", "a normal map")
+                prompt_text = "" if prompt is None else prompt
                 text_inputs = self.tokenizer(
-                    prompt_str,
+                    prompt_text,
                     padding="max_length",
                     max_length=self.tokenizer.model_max_length,
                     truncation=True,
                     return_tensors="pt",
                 )
-                self.prompt_embeds = self.text_encoder(text_inputs.input_ids.to(device))[0]
+                self.prompt_embeds = self.text_encoder(
+                    text_inputs.input_ids.to(device)
+                )[0]
             prompt_embeds_base = self.prompt_embeds
         else:
             prompt_embeds_base = prompt_embeds
 
-        prompt_embeds_fp32 = prompt_embeds_base.repeat(B, 1, 1).to(device=device, dtype=torch.float32)
-        prompt_embeds_mp = prompt_embeds_fp32.to(device=device, dtype=fp32_dtype)
-        _log_dt("text encoder / prompt embeds", t6)
+        prompt_embeds_model = prompt_embeds_base.repeat(
+            batch_size, 1, 1
+        ).to(device=device, dtype=model_dtype)
 
-        # Fixed training timestep.
-        timesteps = torch.full((B,), t_fixed, device=device, dtype=torch.long)
-
-        # -----------------------------
-        # H) DINO ControlNet, using FoundationStereo left_tokens
-        # -----------------------------
-        t7 = _cuda_time()
-        with no_autocast:
-            if left_tokens is None:
-                # Fallback only. Training uses left_tokens returned by FoundationStereo.
-                dino_out = self.FoundationStereo.feature.dino(
-                    left_stereo.float(), return_tokens=True, return_depth=False
-                )
-                left_tokens = dino_out["tokens"] if isinstance(dino_out, dict) else dino_out
-
-            dino_dtype = fp32_dtype
-            dino_device = device
-            dino_tokens_raw = left_tokens
-            dino_tokens_raw = dino_tokens_raw.to(device=dino_device, dtype=dino_dtype)
-            dino_feat = self.dino_controlnet.dino_controlnet_cond_embedding(dino_tokens_raw)
-            if dino_feat.shape[-2:] != unet_input.shape[-2:]:
-                dino_feat = F.interpolate(
-                    dino_feat,
-                    size=unet_input.shape[-2:],
-                    mode="bilinear",
-                    align_corners=False,
-                )
-            dino_feat = dino_feat.to(device=dino_device, dtype=dino_dtype)    
-            dino_dtype = fp32_dtype
-            dino_device = device   
-            prompt_embeds_dino = prompt_embeds_fp32.to(
-                device=dino_device,
-                dtype=dino_dtype,
-            ) 
-            dino_down_res, _ = self.dino_controlnet(
-                dino_feat,
-                timesteps.to(dino_device),
-                encoder_hidden_states=prompt_embeds_dino,
-                conditioning_scale=controlnet_conditioning_scale,
-                guess_mode=False,
-                return_dict=False,
-            )
-        dino_down_res_copy = [r.to(device=device, dtype=fp32_dtype) for r in dino_down_res]
-        _log_dt("dino_controlnet", t7)
-
-        # -----------------------------
-        # I) RGB ControlNet + one-shot UNet latent prediction
-        # -----------------------------
-        t8 = _cuda_time()
-        down_res, mid_res = self.controlnet(
-            warp_to_left_latent.detach(),
-            timesteps,
-            encoder_hidden_states=prompt_embeds_mp,
-            conditioning_scale=controlnet_conditioning_scale,
+        normal_timesteps = torch.zeros_like(timesteps)
+        normal_down_residuals, _ = self.normal_controlnet(
+            sample=init_latent.detach(),
+            timestep=normal_timesteps,
+            encoder_hidden_states=prompt_embeds_model,
+            conditioning_scale=float(
+                normal_controlnet_conditioning_scale
+            ),
             guess_mode=False,
             return_dict=False,
         )
-        down_res = [r.to(device=device, dtype=fp32_dtype) for r in down_res]
-        mid_res = mid_res.to(device=device, dtype=fp32_dtype)
+        normal_down_residuals = [
+            residual.to(device=device, dtype=model_dtype)
+            for residual in normal_down_residuals
+        ]
 
-        task_emb = torch.tensor([1, 0], device=device, dtype=torch.float32).unsqueeze(0)
-        task_emb = torch.cat([torch.sin(task_emb), torch.cos(task_emb)], dim=-1)
-        task_emb = task_emb.repeat(B, 1).to(device=device, dtype=fp32_dtype)
+        warp_down_residuals, warp_mid_residual = self.controlnet(
+            sample=warp_latent.detach(),
+            timestep=timesteps,
+            encoder_hidden_states=prompt_embeds_model,
+            conditioning_scale=float(
+                warp_controlnet_conditioning_scale
+            ),
+            guess_mode=False,
+            return_dict=False,
+        )
+        warp_down_residuals = [
+            residual.to(device=device, dtype=model_dtype)
+            for residual in warp_down_residuals
+        ]
+        warp_mid_residual = warp_mid_residual.to(
+            device=device,
+            dtype=model_dtype,
+        )
+
+        task_embedding = torch.tensor(
+            [1.0, 0.0],
+            device=device,
+            dtype=torch.float32,
+        ).unsqueeze(0)
+        task_embedding = torch.cat(
+            [torch.sin(task_embedding), torch.cos(task_embedding)],
+            dim=-1,
+        )
+        task_embedding = task_embedding.repeat(
+            batch_size, 1
+        ).to(dtype=model_dtype)
 
         pred_latent_x0 = self.dino_unet_forward(
             self.unet,
             unet_input,
             timesteps,
-            encoder_hidden_states=prompt_embeds_mp,
-            down_block_additional_residuals=down_res,
-            mid_block_additional_residual=mid_res,
-            dino_down_block_additional_residuals=dino_down_res_copy,
-            class_labels=task_emb,
+            encoder_hidden_states=prompt_embeds_model,
+            down_block_additional_residuals=warp_down_residuals,
+            mid_block_additional_residual=warp_mid_residual,
+            dino_down_block_additional_residuals=normal_down_residuals,
+            class_labels=task_embedding,
             return_dict=False,
         )[0]
-        _log_dt("controlnet + one-shot unet", t8)
 
-        # -----------------------------
-        # J) decode predicted normal latent
-        # -----------------------------
-        t9 = _cuda_time()
         prediction = self.decode_prediction(pred_latent_x0)
-        prediction = self.normalize_normals(prediction.float()).to(dtype=fp32_dtype)
-        _log_dt("vae.decode + normalize", t9)
-
-        # -----------------------------
-        # K) resize prediction, disparity, and init normal back to original size
-        # -----------------------------
-        t10 = _cuda_time()
-        if match_input_resolution and prediction.shape[-2:] != original_resolution:
-            prediction = self.image_processor.resize_antialias(
-                prediction, original_resolution, resample_method_output, is_aa=False
-            )
-            prediction = self.normalize_normals(prediction.float()).to(dtype=fp32_dtype)
-
-        disp_out = disp_pred_safe
-        normal_init_out = normal_init
-        if match_input_resolution and disp_pred_safe.shape[-2:] != original_resolution:
-            disp_out = F.interpolate(disp_pred_safe, size=original_resolution, mode="bilinear", align_corners=False)
-            disp_scale = float(original_resolution[1]) / float(W_resize)
-            disp_out = disp_out * disp_scale
-            normal_init_out = F.interpolate(normal_init, size=original_resolution, mode="bilinear", align_corners=False)
-            normal_init_out = normalize_normals(normal_init_out.float()).to(dtype=fp32_dtype)
-        _log_dt("resize outputs", t10)
-
-        # -----------------------------
-        # L) output convert
-        # -----------------------------
-        t11 = _cuda_time()
-        if output_type == "np":
-            prediction = self.image_processor.pt_to_numpy(prediction)
-            prediction = prediction.clip(min=-1, max=1)
-        elif output_type == "pt":
-            prediction = prediction.clamp(-1, 1)
-        else:
-            raise ValueError(f"Unsupported output_type={output_type}. Use 'np' or 'pt'.")
-        _log_dt("output convert", t11)
-
-        _log_dt("TOTAL __call__", t_all)
-
-        return StableNormalOutput(
-            prediction=prediction,
-            latent=pred_latent_x0,
-            gaus_noise=None,
-            disp_pred=disp_out,
-            normal_init=normal_init_out,
+        prediction = self.normalize_normals(
+            prediction.float()
         )
+
+        if (
+            match_input_resolution
+            and prediction.shape[-2:] != original_resolution
+        ):
+            prediction = self.image_processor.resize_antialias(
+                prediction,
+                original_resolution,
+                resample_method_output,
+                is_aa=False,
+            )
+            prediction = self.normalize_normals(
+                prediction.float()
+            )
+
+        disparity_output = disp_pred_safe
+        if (
+            match_input_resolution
+            and disp_pred_safe.shape[-2:] != original_resolution
+        ):
+            disparity_output = F.interpolate(
+                disp_pred_safe,
+                size=original_resolution,
+                mode="bilinear",
+                align_corners=False,
+            )
+            disparity_output = disparity_output * (
+                float(original_w) / float(resize_w)
+            )
+
+        if output_type == "np":
+            normal_output = self.image_processor.pt_to_numpy(
+                prediction
+            ).clip(min=-1, max=1)
+        elif output_type == "pt":
+            normal_output = prediction.clamp(-1, 1)
+        else:
+            raise ValueError(
+                f"Unsupported output_type={output_type!r}; use 'np' or 'pt'."
+            )
+
+        output = GeoStereoOutput(
+            normal=normal_output,
+            disparity=disparity_output,
+        )
+        if return_dict:
+            return output
+        return output.normal, output.disparity
 
 
     # Copied from diffusers.pipelines.marigold.pipeline_marigold_depth.MarigoldDepthPipeline.prepare_latents
@@ -1123,3 +1383,7 @@ def retrieve_timesteps(
         scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
         timesteps = scheduler.timesteps
     return timesteps, num_inference_steps
+
+# Backward-compatible aliases.
+StableNormalPipeline = GeoStereoPipeline
+StableNormalOutput = GeoStereoOutput

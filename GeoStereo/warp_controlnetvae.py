@@ -44,175 +44,7 @@ from diffusers.models import ControlNetModel
 import pdb
 
 
-def conv_nd(dims, *args, **kwargs):
-    """
-    Create a 1D, 2D, or 3D convolution module.
-    """
-    if dims == 1:
-        return nn.Conv1d(*args, **kwargs)
-    elif dims == 2:
-        return nn.Conv2d(*args, **kwargs)
-    elif dims == 3:
-        return nn.Conv3d(*args, **kwargs)
-    raise ValueError(f"unsupported dimensions: {dims}")
-
-def zero_module(module):
-    """
-    Zero out the parameters of a module and return it.
-    """
-    for p in module.parameters():
-        p.detach().zero_()
-    return module
-
-
-class DINOControlNetConditioningEmbedding(nn.Module):
-    def __init__(
-        self,
-        conditioning_embedding_channels: int,
-        conditioning_channels: int = 3,
-        block_out_channels = (16, 32, 64, 128),
-        up_sampling='transpose'
-    ):
-        super().__init__()
-
-        self.conv_in = conv_nd(
-            2, conditioning_channels, block_out_channels[0], kernel_size=3, padding=1
-        )
-
-        self.blocks = nn.ModuleList([])
-
-        for i in range(len(block_out_channels) - 1):
-            channel_in = block_out_channels[i]
-            channel_out = block_out_channels[i + 1]
-            self.blocks.append(
-                conv_nd(2, channel_in, channel_in, kernel_size=3, padding=1)
-            )
-            self.blocks.append(
-                conv_nd(
-                    2, channel_in, channel_out, kernel_size=3, padding=1, stride=1
-                )
-            )
-
-        if up_sampling == 'transpose':
-            self.conv_out = zero_module(
-                nn.ConvTranspose2d(
-                    in_channels=block_out_channels[-1],
-                    out_channels=conditioning_embedding_channels,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                    )
-            )
-        else:
-            self.conv_out = zero_module(conv_nd(dims, block_out_channels[-1], conditioning_embedding_channels, 3, padding=1))
-
-    def forward(self, conditioning):
-
-
-        embedding = self.conv_in(conditioning)
-        embedding = F.silu(embedding)
-
-
-        for block in self.blocks:
-            embedding = block(embedding)
-            embedding = F.silu(embedding)
-
-        embedding = self.conv_out(embedding)
-
-        return embedding
-
-
-class DINOControlNetVAEModel(ControlNetModel):
-    @register_to_config
-    def __init__(
-        self,
-        in_channels: int = 4,
-        conditioning_channels: int = 3,
-        flip_sin_to_cos: bool = True,
-        freq_shift: int = 0,
-        down_block_types: Tuple[str, ...] = (
-            "CrossAttnDownBlock2D",
-            "CrossAttnDownBlock2D",
-            "CrossAttnDownBlock2D",
-            "DownBlock2D",
-        ),
-        mid_block_type: Optional[str] = "UNetMidBlock2DCrossAttn",
-        only_cross_attention: Union[bool, Tuple[bool]] = False,
-        block_out_channels: Tuple[int, ...] = (320, 640, 1280, 1280),
-        layers_per_block: int = 2,
-        downsample_padding: int = 1,
-        mid_block_scale_factor: float = 1,
-        act_fn: str = "silu",
-        norm_num_groups: Optional[int] = 32,
-        norm_eps: float = 1e-5,
-        cross_attention_dim: int = 1280,
-        transformer_layers_per_block: Union[int, Tuple[int, ...]] = 1,
-        encoder_hid_dim: Optional[int] = None,
-        encoder_hid_dim_type: Optional[str] = None,
-        attention_head_dim: Union[int, Tuple[int, ...]] = 8,
-        num_attention_heads: Optional[Union[int, Tuple[int, ...]]] = None,
-        use_linear_projection: bool = False,
-        class_embed_type: Optional[str] = None,
-        addition_embed_type: Optional[str] = None,
-        addition_time_embed_dim: Optional[int] = None,
-        num_class_embeds: Optional[int] = None,
-        upcast_attention: bool = False,
-        resnet_time_scale_shift: str = "default",
-        projection_class_embeddings_input_dim: Optional[int] = None,
-        controlnet_conditioning_channel_order: str = "rgb",
-        conditioning_embedding_out_channels: Optional[Tuple[int, ...]] = (16, 32, 96, 256),
-        global_pool_conditions: bool = False,
-        addition_embed_type_num_heads: int = 64,
-        dino_up_sampling='transpose',
-        dino_conditioning_embedding_channels = 320,
-        dino_conditioning_channels = 1024,
-        dino_block_out_channels = [512, 128, 256, 256],
-    ):
-        super().__init__(
-            in_channels,
-            conditioning_channels,
-            flip_sin_to_cos,
-            freq_shift,
-            down_block_types,
-            mid_block_type,
-            only_cross_attention,
-            block_out_channels,
-            layers_per_block,
-            downsample_padding,
-            mid_block_scale_factor,
-            act_fn,
-            norm_num_groups,
-            norm_eps,
-            cross_attention_dim,
-            transformer_layers_per_block,
-            encoder_hid_dim,
-            encoder_hid_dim_type,
-            attention_head_dim,
-            num_attention_heads,
-            use_linear_projection,
-            class_embed_type,
-            addition_embed_type,
-            addition_time_embed_dim,
-            num_class_embeds,
-            upcast_attention,
-            resnet_time_scale_shift,
-            projection_class_embeddings_input_dim,
-            controlnet_conditioning_channel_order,
-            conditioning_embedding_out_channels,
-            global_pool_conditions,
-            addition_embed_type_num_heads,
-                )
-
-
-        # dino controlnet embeddings
-        self.dino_controlnet_cond_embedding = DINOControlNetConditioningEmbedding(
-            up_sampling = dino_up_sampling,
-            conditioning_embedding_channels = dino_conditioning_embedding_channels,
-            conditioning_channels = dino_conditioning_channels,
-            block_out_channels = dino_block_out_channels ,
-        )
-
-
+class Warp_ControlNetVAEModel(ControlNetModel):
     def forward(
         self,
         sample: torch.Tensor,
@@ -229,7 +61,7 @@ class DINOControlNetVAEModel(ControlNetModel):
         return_dict: bool = True,
     ) -> Union[ControlNetOutput, Tuple[Tuple[torch.Tensor, ...], torch.Tensor]]:
         """
-        The [`ControlNetVAEModel`] forward method.
+        The [`Warp_ControlNetVAEModel`] forward method.
 
         Args:
             sample (`torch.Tensor`):
@@ -347,7 +179,7 @@ class DINOControlNetVAEModel(ControlNetModel):
 
         emb = emb + aug_emb if aug_emb is not None else emb
         # 2. pre-process
-        # sample = self.conv_in(sample) # without input_blocks[0]
+        sample = self.conv_in(sample)
 
         # 3. down
         down_block_res_samples = (sample,)
@@ -365,18 +197,31 @@ class DINOControlNetVAEModel(ControlNetModel):
 
             down_block_res_samples += res_samples
 
-        # 5. Control net blocks
-        # dino features without zero conv
-        controlnet_down_block_res_samples = (down_block_res_samples[0], )
+        # 4. mid
+        if self.mid_block is not None:
+            if hasattr(self.mid_block, "has_cross_attention") and self.mid_block.has_cross_attention:
+                sample = self.mid_block(
+                    sample,
+                    emb,
+                    encoder_hidden_states=encoder_hidden_states,
+                    attention_mask=attention_mask,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                )
+            else:
+                sample = self.mid_block(sample, emb)
 
-        for down_block_res_sample, controlnet_block in zip(down_block_res_samples[1:], self.controlnet_down_blocks[1:]):
-            down_block_res_sample = controlnet_block(down_block_res_sample)
+        # 5. Control net blocks
+
+        controlnet_down_block_res_samples = ()
+
+        # NOTE that controlnet downblock is zeroconv, we discard
+        for down_block_res_sample, controlnet_block in zip(down_block_res_samples, self.controlnet_down_blocks):
+            down_block_res_sample = down_block_res_sample
             controlnet_down_block_res_samples = controlnet_down_block_res_samples + (down_block_res_sample,)
 
         down_block_res_samples = controlnet_down_block_res_samples
 
-
-        mid_block_res_sample = None
+        mid_block_res_sample = sample
 
         # 6. scaling
         if guess_mode and not self.config.global_pool_conditions:
@@ -386,11 +231,13 @@ class DINOControlNetVAEModel(ControlNetModel):
             mid_block_res_sample = mid_block_res_sample * scales[-1]  # last one
         else:
             down_block_res_samples = [sample * conditioning_scale for sample in down_block_res_samples]
+            mid_block_res_sample = mid_block_res_sample * conditioning_scale
 
         if self.config.global_pool_conditions:
             down_block_res_samples = [
                 torch.mean(sample, dim=(2, 3), keepdim=True) for sample in down_block_res_samples
             ]
+            mid_block_res_sample = torch.mean(mid_block_res_sample, dim=(2, 3), keepdim=True)
 
         if not return_dict:
             return (down_block_res_samples, mid_block_res_sample)

@@ -2,7 +2,6 @@
 
 <h1>GeoStereo: A Unified Stereo Geometry Estimation Framework for Disparity and Surface Normal</h1>
 
-
 <p>
   Qizhe Wei, Xianda Guo, Shaocong Xu, Hong Li, Runyi Yang, Hao Zhao
 </p>
@@ -30,14 +29,14 @@
 
 ## Overview
 
-**GeoStereo** is a unified stereo geometry estimation framework for disparity and surface normal prediction. Given a rectified stereo pair, GeoStereo first estimates dense binocular correspondence and converts the predicted disparity into an initial surface-normal prior. Meanwhile, the right image is warped into the left camera view to provide explicit stereo appearance and correspondence cues.
+**GeoStereo** is a unified stereo geometry estimation framework for disparity and surface-normal prediction. Given a rectified stereo pair, GeoStereo first estimates dense binocular correspondence and converts the predicted disparity into an initial surface-normal prior. Meanwhile, the right image is warped into the left camera view to provide explicit stereo appearance and correspondence cues.
 
-These complementary geometric signals are encoded in the latent space and injected into a Lotus-style diffusion UNet through two dedicated conditioning branches:
+These complementary geometric signals are encoded in the latent space and injected into a diffusion UNet through two dedicated conditioning branches:
 
-- a **warped-view ControlNet**, which provides appearance and correspondence information from the right image warped to the left view;
-- a **normal-prior ControlNet**, which provides geometry-aware initialization derived from stereo disparity.
+- a **warped-view ControlNet**, which provides appearance and correspondence information from the right image warped into the left camera view;
+- a **normal-prior ControlNet**, which provides a geometry-aware condition derived from stereo disparity.
 
-The diffusion model combines stereo geometry with strong generative visual priors to predict spatially coherent surface normals while preserving scene structure and object boundaries. The unified design also enables disparity and surface-normal estimation within the same stereo geometry framework.
+The diffusion model combines stereo geometry with generative visual priors to predict spatially coherent surface normals while preserving scene structure and object boundaries. The same pipeline also returns the FoundationStereo disparity estimate, providing disparity and surface-normal prediction within one stereo geometry framework.
 
 <p align="center">
   <img src="assets/pipe.png" alt="GeoStereo Pipeline" width="95%">
@@ -45,13 +44,13 @@ The diffusion model combines stereo geometry with strong generative visual prior
 
 ### Highlights
 
-- **Unified stereo geometry estimation:** supports both disparity and surface-normal prediction.
-- **Stereo-guided geometry prior:** converts dense stereo correspondence into an explicit surface-normal initialization.
+- **Unified stereo geometry estimation:** predicts both disparity and surface normals from one rectified stereo pair.
+- **Stereo-guided normal prior:** converts dense disparity into an explicit geometric condition.
 - **Dual conditioning branches:** separately injects warped-view appearance cues and stereo-derived normal cues.
-- **Diffusion-based refinement:** combines geometric constraints with strong generative priors for robust normal prediction.
-- **Joint supervision:** optimizes latent-space reconstruction together with decoded normal-direction consistency.
-- **Complete workflow:** provides scripts for training, inference, and evaluation.
-- **Public checkpoints:** pretrained model weights are hosted on [Hugging Face](https://huggingface.co/qz-wei/GeoStereo).
+- **Diffusion-based refinement:** improves the spatial coherence and boundary quality of surface-normal prediction.
+- **Joint supervision:** combines latent-space reconstruction with decoded normal-direction consistency.
+- **Complete workflow:** provides training, inference, and evaluation code.
+- **Public checkpoints:** pretrained weights are hosted on [Hugging Face](https://huggingface.co/qz-wei/GeoStereo).
 
 ---
 
@@ -85,7 +84,7 @@ python -m pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
 
-If `flash-attn` fails to build during installation, install it separately without build isolation:
+If `flash-attn` fails to build, install it separately without build isolation:
 
 ```bash
 pip install flash-attn==2.8.3 --no-build-isolation
@@ -95,11 +94,11 @@ pip install flash-attn==2.8.3 --no-build-isolation
 
 ## Pretrained Weights
 
-The pretrained GeoStereo checkpoints are available on Hugging Face:
+The pretrained GeoStereo model is available on Hugging Face:
 
 - [qz-wei/GeoStereo](https://huggingface.co/qz-wei/GeoStereo)
 
-Download the complete repository using the Hugging Face CLI:
+Download the complete model repository with the Hugging Face CLI:
 
 ```bash
 mkdir -p checkpoints/GeoStereo
@@ -108,7 +107,7 @@ hf download qz-wei/GeoStereo \
   --local-dir checkpoints/GeoStereo
 ```
 
-Alternatively, download the weights with Git LFS:
+Alternatively, use Git LFS:
 
 ```bash
 git lfs install
@@ -117,40 +116,83 @@ git clone https://huggingface.co/qz-wei/GeoStereo \
   checkpoints/GeoStereo
 ```
 
-The downloaded checkpoint is expected to contain the main diffusion and conditioning components, for example:
+The model directory should follow this structure:
 
 ```text
 checkpoints/GeoStereo/
+├── GeoStereo_config.json
 ├── unet/
 ├── controlnet/
 ├── normal_controlnet/
 ├── vae/
 ├── text_encoder/
 ├── tokenizer/
-└── scheduler/
+├── scheduler/
+└── foundation_stereo/
+    ├── config.json
+    └── model.safetensors
 ```
+
+All components are loaded from the same model directory. No additional FoundationStereo configuration or checkpoint path is required.
 
 ---
 
 ## Inference
 
-Run inference on rectified stereo image pairs with:
+GeoStereo takes one rectified left-right stereo pair and saves two predictions:
+
+```text
+normal.png
+disparity.png
+```
+
+Run inference with:
 
 ```bash
 python infer.py \
-  --pair_txt ./left_right.txt
+  --model_path checkpoints/GeoStereo \
+  --left /path/to/left.png \
+  --right /path/to/right.png \
+  --save_dir outputs/example
 ```
 
-The input text file should contain the paths of the left and right images. Before running inference, update the checkpoint paths and output directory according to your local environment.
+Optional runtime arguments include:
 
-A typical inference configuration should specify:
+```text
+--device        Inference device, such as cuda, cuda:0, or cpu
+--dtype         Diffusion-model precision: fp32, fp16, or bf16
+--seed          Random seed used to initialize the diffusion latent
+```
 
-- the left and right image paths;
-- the GeoStereo checkpoint;
-- the FoundationStereo checkpoint and configuration;
-- the output directory.
+For example, FP16 inference on the first GPU can be launched with:
 
-Use the following command to inspect all supported options:
+```bash
+python infer.py \
+  --model_path checkpoints/GeoStereo \
+  --left /path/to/left.png \
+  --right /path/to/right.png \
+  --save_dir outputs/example \
+  --device cuda:0 \
+  --dtype fp16 \
+  --seed 42
+```
+
+The output directory contains only:
+
+```text
+outputs/example/
+├── normal.png
+└── disparity.png
+```
+
+The Python output object exposes:
+
+```python
+output.normal
+output.disparity
+```
+
+Use the following command to inspect all supported arguments:
 
 ```bash
 python infer.py --help
@@ -160,25 +202,30 @@ python infer.py --help
 
 ## Evaluation
 
-Run evaluation with:
+The evaluation script uses the same model directory layout as inference:
 
 ```bash
-python eval.py
+python eval.py \
+  --model_path checkpoints/GeoStereo
 ```
 
-Before evaluation, update the dataset paths, checkpoint paths, and evaluation configuration according to your local directory structure.
-
-Use the following command to inspect all supported options:
+Dataset paths and benchmark-specific options can be inspected with:
 
 ```bash
 python eval.py --help
 ```
 
+For stereo benchmarks, make sure that the left and right images are rectified and follow the dataset-specific calibration and resolution conventions.
+
 ---
 
 ## Training
 
-GeoStereo supports distributed training through Hugging Face Accelerate. The following example launches training on four GPUs:
+GeoStereo supports distributed training with Hugging Face Accelerate.
+
+All model components are initialized from one complete GeoStereo checkpoint through `--restore_ckpt`. The training script does not require a separate base diffusion checkpoint, FoundationStereo YAML file, or FoundationStereo `.pth` checkpoint.
+
+A four-GPU training example is:
 
 ```bash
 accelerate launch \
@@ -187,40 +234,133 @@ accelerate launch \
   --mixed_precision no \
   --dynamo_backend no \
   train.py \
+  --restore_ckpt checkpoints/GeoStereo \
+  --output_dir outputs/ckpt \
+  --logging_dir outputs/logs \
+  --train_batch_size 2 \
+  --max_train_steps 40000 \
+  --learning_rate 2e-5 \
   --vis_step 50
 ```
 
-Important training arguments include:
+The restored checkpoint must contain:
 
 ```text
---model_path                 Base Lotus diffusion checkpoint
---restore_ckpt               GeoStereo checkpoint used for initialization
---ckpt_dir                   FoundationStereo checkpoint
---cfg_yaml                   FoundationStereo configuration file
---output_dir                 Directory for model checkpoints
---logging_dir                Directory for TensorBoard logs
---train_batch_size           Batch size per GPU
---max_train_steps            Number of optimization steps
---learning_rate              Peak learning rate
---lr_total_iter_length       Learning-rate schedule length
---lambda_ang                 Weight of decoded normal cosine loss
---checkpointing_steps        Checkpoint saving interval
---vis_step                   TensorBoard visualization interval
+restore_ckpt/
+├── unet/
+├── controlnet/
+├── normal_controlnet/
+├── vae/
+├── text_encoder/
+├── tokenizer/
+├── scheduler/
+└── foundation_stereo/
+    ├── config.json
+    └── model.safetensors
 ```
 
-Use the following command to inspect all supported options:
+During training:
+
+- the UNet, warped-view ControlNet, and normal-prior ControlNet are optimized;
+- the VAE and text encoder are frozen;
+- FoundationStereo is frozen and runs in FP32;
+- FoundationStereo provides disparity and the stereo-derived normal prior;
+- the UNet predicts the clean target-normal latent at a fixed diffusion timestep;
+- training combines latent-space regression with an optional decoded normal cosine loss.
+
+Important arguments include:
+
+```text
+--restore_ckpt                   Complete GeoStereo checkpoint used for initialization
+--output_dir                     Directory used to save training checkpoints
+--logging_dir                    TensorBoard log directory
+--train_batch_size               Batch size per GPU
+--max_train_steps                Total number of optimization steps
+--learning_rate                  Initial learning rate
+--lr_exp_warmup_steps            Learning-rate warmup length
+--lr_total_iter_length           Learning-rate schedule length
+--gradient_accumulation_steps    Number of gradient accumulation steps
+--mixed_precision                no, fp16, or bf16
+--lambda_ang                     Weight of the decoded normal cosine loss
+--warp_control_scale             Conditioning scale of the warped-view ControlNet
+--normal_control_scale           Conditioning scale of the normal-prior ControlNet
+--checkpointing_steps            Checkpoint saving interval
+--vis_step                       TensorBoard visualization interval
+```
+
+Use the following command to inspect all training arguments:
 
 ```bash
 python train.py --help
 ```
 
-Monitor training with TensorBoard:
+### Resume Training
+
+To restore optimizer, scheduler, random state, and global step from an Accelerate checkpoint, use:
+
+```bash
+accelerate launch \
+  --multi_gpu \
+  --num_processes 4 \
+  train.py \
+  --restore_ckpt checkpoints/GeoStereo \
+  --output_dir outputs/ckpt \
+  --resume_from_checkpoint checkpoint-10000
+```
+
+`--restore_ckpt` specifies the model initialization directory, while `--resume_from_checkpoint` specifies the saved Accelerate state inside `--output_dir`.
+
+### Saved Checkpoints
+
+Training checkpoints contain:
+
+```text
+checkpoint-10000/
+├── unet/
+├── controlnet/
+├── normal_controlnet/
+├── vae/
+├── text_encoder/
+├── tokenizer/
+├── scheduler/
+└── Accelerate training-state files
+```
+
+FoundationStereo is frozen and is intentionally not duplicated in every training checkpoint. To use a newly trained checkpoint as a standalone inference model, copy the original FoundationStereo directory into it:
+
+```bash
+cp -r \
+  checkpoints/GeoStereo/foundation_stereo \
+  outputs/ckpt/checkpoint-10000/
+```
+
+The resulting standalone model directory should contain:
+
+```text
+checkpoint-10000/
+├── unet/
+├── controlnet/
+├── normal_controlnet/
+├── vae/
+├── text_encoder/
+├── tokenizer/
+├── scheduler/
+└── foundation_stereo/
+    ├── config.json
+    └── model.safetensors
+```
+
+### TensorBoard
+
+Monitor training with:
 
 ```bash
 tensorboard \
   --logdir outputs/logs \
   --port 6006
 ```
+
+The training script records optimization losses, learning rate, stereo disparity, warped-view inputs, normal priors, ground-truth normals, and decoded normal predictions.
 
 ---
 
@@ -234,11 +374,17 @@ More qualitative results, visual comparisons, and method details are available o
 
 ## Acknowledgements
 
-GeoStereo is built upon several excellent open-source projects, including:
+GeoStereo is built upon several excellent open-source projects:
 
 - [FoundationStereo](https://github.com/NVlabs/FoundationStereo)
 - [Diffusers](https://github.com/huggingface/diffusers)
 - [DINOv2](https://github.com/facebookresearch/dinov2)
 - [StableNormal](https://github.com/Stable-X/StableNormal)
 
-We sincerely thank the authors and contributors for making their work publicly available.
+We also thank the authors and maintainers of the datasets used in the development and evaluation of GeoStereo:
+
+- [Hypersim](https://github.com/apple/ml-hypersim)
+- [IRS](https://github.com/HKBU-HPML/IRS)
+- [KITTI Stereo](https://www.cvlibs.net/datasets/kitti/eval_scene_flow.php?benchmark=stereo)
+
+We sincerely thank all authors, contributors, and dataset creators for making their code, models, annotations, and benchmarks publicly available.
