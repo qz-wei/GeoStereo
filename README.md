@@ -42,17 +42,7 @@ The diffusion model combines stereo geometry with generative visual priors to pr
   <img src="assets/pipe.png" alt="GeoStereo Pipeline" width="95%">
 </p>
 
-### Highlights
 
-- **Unified stereo geometry estimation:** predicts both disparity and surface normals from one rectified stereo pair.
-- **Stereo-guided normal prior:** converts dense disparity into an explicit geometric condition.
-- **Dual conditioning branches:** separately injects warped-view appearance cues and stereo-derived normal cues.
-- **Diffusion-based refinement:** improves the spatial coherence and boundary quality of surface-normal prediction.
-- **Joint supervision:** combines latent-space reconstruction with decoded normal-direction consistency.
-- **Complete workflow:** provides training, inference, and evaluation code.
-- **Public checkpoints:** pretrained weights are hosted on [Hugging Face](https://huggingface.co/qz-wei/GeoStereo).
-
----
 
 ## Installation
 
@@ -73,8 +63,8 @@ cd GeoStereo
 ### 2. Create a Conda environment
 
 ```bash
-conda create -n geostereo python=3.11 -y
-conda activate geostereo
+conda create -n GeoStereo python=3.11 -y
+conda activate GeoStereo
 ```
 
 ### 3. Install dependencies
@@ -164,18 +154,6 @@ Optional runtime arguments include:
 --seed          Random seed used to initialize the diffusion latent
 ```
 
-For example, FP16 inference on the first GPU can be launched with:
-
-```bash
-python infer.py \
-  --model_path checkpoints/GeoStereo \
-  --left /path/to/left.png \
-  --right /path/to/right.png \
-  --save_dir outputs/example \
-  --device cuda:0 \
-  --dtype fp16 \
-  --seed 42
-```
 
 The output directory contains only:
 
@@ -192,32 +170,10 @@ output.normal
 output.disparity
 ```
 
-Use the following command to inspect all supported arguments:
-
-```bash
-python infer.py --help
-```
 
 ---
 
-## Evaluation
 
-The evaluation script uses the same model directory layout as inference:
-
-```bash
-python eval.py \
-  --model_path checkpoints/GeoStereo
-```
-
-Dataset paths and benchmark-specific options can be inspected with:
-
-```bash
-python eval.py --help
-```
-
-For stereo benchmarks, make sure that the left and right images are rectified and follow the dataset-specific calibration and resolution conventions.
-
----
 
 ## Training
 
@@ -288,11 +244,6 @@ Important arguments include:
 --vis_step                       TensorBoard visualization interval
 ```
 
-Use the following command to inspect all training arguments:
-
-```bash
-python train.py --help
-```
 
 ### Resume Training
 
