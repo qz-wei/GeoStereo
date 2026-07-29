@@ -6,6 +6,10 @@
   Qizhe Wei, Xianda Guo, Shaocong Xu, Hong Li, Runyi Yang, Hao Zhao
 </p>
 
+
+<a href="https://arxiv.org/abs/2607.24024">
+  <img src="https://img.shields.io/badge/arXiv-2607.24024-b31b1b.svg" alt="arXiv">
+</a>
 <a href="https://qz-wei.github.io/GeoStereo.github.io/">
   <img src="https://img.shields.io/badge/Project_Page-green" alt="Project Page">
 </a>
